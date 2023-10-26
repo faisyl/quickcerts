@@ -8,6 +8,8 @@ import os.path
 import re
 import socket
 import string
+import web
+import zipstream
 
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
@@ -21,6 +23,9 @@ KEY_EXT = 'key'
 CERT_EXT = 'pem'
 PFX_EXT = 'pfx'
 E = 65537
+ca_private_key = None
+ca_cert = None
+args = None
 
 safe_symbols = set(string.ascii_letters + string.digits + '-.')
 
@@ -84,6 +89,10 @@ def parse_args():
     parser.add_argument("-P", "--password",
                         default='password',
                         help="password for newly generated .pfx files")
+    parser.add_argument("-S", "--server", default=False, action='store_true',
+                        help="Serve certificates over TCP.")
+    parser.add_argument("-p", "--port", default=8080, type=int,
+                        help="Port to serve on, if serving on TCP")
 
     return parser.parse_args()
 
@@ -106,7 +115,10 @@ def ensure_private_key(output_dir, name, key_size):
 def ensure_ca_key(output_dir, key_size):
     return ensure_private_key(output_dir, CA_FILENAME, key_size)
 
+ca_cert_filename = None
+
 def ensure_ca_cert(output_dir, ca_private_key):
+    global ca_cert_filename
     ca_cert_filename = os.path.join(output_dir, CA_FILENAME + '.' + CERT_EXT)
     ca_public_key = ca_private_key.public_key()
     if os.path.exists(ca_cert_filename):
@@ -251,10 +263,101 @@ def ensure_end_entity_suite(output_dir, names, ca_private_key, ca_cert, key_size
     if not is_server:
         ensure_end_entity_pfx(output_dir, name, end_entity_key, end_entity_cert, kdf_rounds, password.encode("utf-8"))
 
+def zf(zipname, files):
+        web.header('Content-type' , 'application/zip')
+        web.header('Content-Disposition', 'attachment; filename="%s"' % (
+        zipname,))
+        web.header('Transfer-Encoding','chunked')
+        ret = zipstream.ZipFile()
+        for f in files:
+            ret.write(f)
+        return ret.__iter__()
+
+def delcerts(prefix):
+    global args
+    for fn in filelist(prefix):
+        if os.path.exists(fn):
+            print("Deleting:", fn)
+            os.unlink(fn)
+class ca:
+    def GET(self):
+        global ca_cert_filename
+        zip_filename = 'ca.zip'
+        return zf('ca-cert.zip', [ca_cert_filename])
+
+def filelist(prefix, exists=False, with_ca=False):
+    global args
+    ret = []
+    if with_ca:
+        ret.append(os.path.join(args.output_dir, "ca.pem"))
+    for ext in [CERT_EXT, KEY_EXT, PFX_EXT]:
+        fn = os.path.join(args.output_dir, "{}.{}".format(prefix, ext))
+        if exists:
+            if os.path.exists(fn):
+                ret.append(fn)
+        else:
+            ret.append(fn)
+    return ret
+
+class client:
+    def GET(self, _args):
+        global ca_cert, ca_private_key, args
+        all = [x.strip() for x in _args.split('/')]
+        names = [x.strip() for x in all[0].split(',')]
+        CN=names[0]
+        if CN=='ca':
+            raise web.Forbidden('Reserved for CA')
+        force = (all[-1] == 'force')
+        if force:
+            delcerts(CN)
+        ensure_end_entity_suite(args.output_dir,
+                                (CN,),
+                                ca_private_key,
+                                ca_cert,
+                                args.key_size,
+                                False,
+                                args.kdf_rounds,
+                                args.password)
+        flist = filelist(CN, exists=True, with_ca=True) 
+        return zf(f"{CN}.zip", flist)
+
+
+class server:
+    def GET(self, _args):
+        global args
+        all = [x.strip() for x in _args.split('/')]
+        ip = web.ctx.ip
+        names =[ip] + [x.strip() for x in all[0].split(',')]
+        force = (all[-1] == 'force')
+        if force:
+            delcerts(ip)
+        ensure_end_entity_suite(args.output_dir,
+                                names,
+                                ca_private_key,
+                                ca_cert,
+                                args.key_size,
+                                True,
+                                args.kdf_rounds,
+                                args.password)
+        flist = filelist(ip, exists=True, with_ca=True) 
+        return zf(f"{ip}.zip", flist)
+
+urls = (
+    '/ca', 'ca',
+    '/client/(.+)', 'client',           # /client/client-name[/force]
+    '/server/(.+)', 'server',           # /server/SAN1,SAN2,SAN3[/force]
+)
+
+
 def main():
+    global args
+    global ca_private_key, ca_cert
     args = parse_args()
     ca_private_key = ensure_ca_key(args.output_dir, args.key_size)
     ca_cert = ensure_ca_cert(args.output_dir, ca_private_key)
+    if args.server:
+        app = web.application(urls, globals())
+        web.httpserver.runsimple(app.wsgifunc(), ("0.0.0.0", args.port))
     if args.domains:
         for names in args.domains:
             ensure_end_entity_suite(args.output_dir,

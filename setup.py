@@ -19,7 +19,9 @@ setup(name='quickcerts',
           'wheel',
       ],
       install_requires=[
-          'cryptography>=1.6',
+          'cryptography>=41.0.5',
+          'zipstream-new>=1.1.8',
+          'web.py>=0.62',
       ],
       entry_points={
           'console_scripts': [

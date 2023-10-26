@@ -1,0 +1,16 @@
+version: "3.8"
+services:
+  quickcerts:
+    build: .
+    container_name: quickcerts
+    ports:
+      - 8080:8080
+    network_mode: host
+    volumes:
+      - ./certs:/certs
+    entrypoint:
+      - quickcerts
+      - -o
+      - /certs
+      - -S
+

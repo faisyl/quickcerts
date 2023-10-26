@@ -115,4 +115,67 @@ options:
   -P PASSWORD, --password PASSWORD
                         password for newly generated .pfx files (default:
                         password)
+  -S, --server          Serve certificates over TCP. (default: False)
+  -p PORT, --port PORT  Port to serve on, if serving on TCP (default: 8080)
 ```
+
+## Run As Server
+Run the CA as a network service to allow you to dynamically generate and fetch 
+certificates over the network with a simple curl or wget command. 
+Running quickcerts with -S enables the web server on port 8080, which can be overridden 
+with the -p argument.
+
+This is nice to have in a development environment where you want to quickly fetch the TLS 
+certificates for both client and server mode services with a simple command line or automated fetch 
+as part of service startup.
+
+### Fetch CA cert
+
+```$ curl -JLO http://<SERVER-IP/HOSTNAME>:8080/ca ```
+OR 
+```$ wget --content-disposition http://<SERVER-IP/HOSTNAME>:8080/ca ```
+
+This should download and place in your current directory a file named ca-cert.zip. This is simply a 
+zipfile containing the CA's public certificate in PEM format.
+
+You could alternatively use the --output <filename.zip> for curl and -O <filename.zip> for wget to save the
+URL to filename.zip.
+
+### Fetch Client Cerificate pair
+
+The URL for the client cert:
+
+``` http://<SERVER-IP/HOSTNAME>:8080/client/<client-name>[/force]```
+
+This will fetch a zipfile containing the newly created client cert for the given <client-name> or fetch 
+an existing key-pair if available.  Adding the optional ```/force``` to the end of the URL forces the server 
+to delete any existing keypair of the same name and generate a new pair with the given name.
+The zipfile also contains the ```ca.pem``` for ease of use.
+
+### Fetch Server certificate pair
+
+The URL for the server cert:
+
+``` http://<SERVER-IP/HOSTNAME>:8080/server/<server-name>[,<san1>,<san2>..][/force]```
+
+This will fetch a zipfile containing the newly created server cert pair. The filenames in the cert are the IP 
+address of the client. The cert pair contains the <server-name>, IP and optional SAN names including wildcard 
+addresses passed in the URL. Please make sure you quote the URL appropriately when using wget or curl on the 
+command line with wildcard addresses like ```*.foo.com```, to prevent the shell from trying to expand the URL 
+before passing it to curl or wget.
+
+As with the client above, ending the URL with ```/force``` will cause the CA to delete existing keypairs of the same
+name (IP address) and generate a new pair. This is useful if you need to update or change the embedded hostmname 
+or SAN entries in the certificate.
+
+### Running under docker compose
+Also included is a docker-compose.yaml file that you can use with docker compose to run the server. Simply running
+```$ docker compose up -d``` should bring up the server on your machine on port 8080. It will map the certs directory 
+to /certs and store the certificates there.
+
+***NOTE:*** The service runs in host-mode networking to allow it to see the correct IP of the client when generating
+server certificates. Without that, docker would present the NATed docker network IP for the client IP and the server
+certificates would not work properly.
+
+
+ 
